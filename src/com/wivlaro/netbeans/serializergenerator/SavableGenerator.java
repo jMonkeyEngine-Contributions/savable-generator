@@ -18,6 +18,7 @@ import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
 import com.wivlaro.jme3.export.FieldInfo;
 import java.io.IOException;
+import java.lang.annotation.IncompleteAnnotationException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -195,8 +196,8 @@ public class SavableGenerator implements CodeGenerator {
 								}
 								catch (Exception e) {
 									final String message = "Failed to make read/write for " + memberVariable.toString() + ": " + e.getMessage();
-									make.addComment(writeBody.get(writeBody.size() - 1), Comment.create(Comment.Style.LINE, message), false);
-									make.addComment(readBody.get(readBody.size() - 1), Comment.create(Comment.Style.LINE, message), false);
+									make.addComment(writeBody.get(writeBody.size() - 1), Comment.create(Comment.Style.BLOCK, message), false);
+									make.addComment(readBody.get(readBody.size() - 1), Comment.create(Comment.Style.BLOCK, message), false);
 									e.printStackTrace(System.out);
 								}
 							}
@@ -279,7 +280,7 @@ public class SavableGenerator implements CodeGenerator {
 				if (!fieldInfo.serialize()) {
 					return;
 				}
-				typeSuffix = fieldInfo.readMethod();
+				typeSuffix = fieldInfo.typeSuffix();
 			}
 			
 			if (typeSuffix == null || typeSuffix.isEmpty()) {
@@ -308,39 +309,14 @@ public class SavableGenerator implements CodeGenerator {
 			if (readMethod == null) {
 				throw new ExpandFailException("Couldn't find readMethod: " + readName);
 			}
-			TypeMirror inputType = readMethod.getReturnType();
+			TypeMirror storedType = readMethod.getReturnType();
 
-			
 			ExpressionTree defaultValue = memberVariable.getInitializer();
-			if (defaultValue == null) {
-				if (memberType.getKind().isPrimitive()) {
-					switch (memberType.getKind())
-					{
-						case BOOLEAN: defaultValue = make.Literal(false); break;
-						case BYTE: defaultValue = make.TypeCast(make.PrimitiveType(TypeKind.BYTE), make.Literal(0)); break;
-						case SHORT: defaultValue = make.TypeCast(make.PrimitiveType(TypeKind.SHORT), make.Literal(0)); break;
-						case INT: defaultValue = make.Literal(0); break;
-						case LONG: defaultValue = make.Literal(0L); break;
-						case CHAR: defaultValue = make.Literal('\0'); break;
-						case FLOAT: defaultValue = make.Literal(0.0f); break;
-						case DOUBLE: defaultValue = make.Literal(0.0); break;
-					}
-				}
-				else {
-					defaultValue = make.Literal(null);
-				}
+			if (defaultValue == null || !workingCopy.getTypes().isAssignable(memberType, storedType)) {
+				defaultValue = makeDefaultValue(storedType);
 			}
 
 			final LiteralTree fieldLiteral = make.Literal(memberVariable.getName().toString());
-			
-			writeBody.add(make.ExpressionStatement(
-					make.MethodInvocation(
-					Collections.<ExpressionTree>emptyList(),
-					make.MemberSelect(make.Identifier(capsuleIdentifier), writeName),
-					Arrays.asList(
-						make.Identifier(memberVariable.getName().toString()),
-						fieldLiteral,
-						defaultValue))));
 
 			ExpressionTree inputExpression;
 			
@@ -354,15 +330,25 @@ public class SavableGenerator implements CodeGenerator {
 							make.MemberSelect(make.Identifier(workingCopy.getTypeUtilities().getTypeName(memberType, TypeUtilities.TypeNameOptions.PRINT_FQN)),
 											  "class"),
 							defaultValue));
-				inputType = memberType;
+				storedType = memberType;
 			}
 			else {
 				inputExpression = make.MethodInvocation(
 						Collections.<ExpressionTree>emptyList(),
 						make.MemberSelect(make.Identifier(capsuleIdentifier), readName),
-						Arrays.asList(fieldLiteral,defaultValue));
+						Arrays.asList(fieldLiteral, defaultValue));
 			}
-			readBody.add(converterGenerator.generateAssignmentConverter(inputType, inputExpression, memberType, memberLocation));
+			
+			writeBody.add(make.ExpressionStatement(
+					make.MethodInvocation(
+					Collections.<ExpressionTree>emptyList(),
+					make.MemberSelect(make.Identifier(capsuleIdentifier), writeName),
+					Arrays.asList(
+						converterGenerator.generateConverterExpression(writeBody, memberType, memberLocation, storedType),
+						fieldLiteral,
+						defaultValue))));
+			
+			readBody.add(converterGenerator.generateConverterAssignment(storedType, inputExpression, memberType, memberLocation));
 		}
 		
 
@@ -469,6 +455,27 @@ public class SavableGenerator implements CodeGenerator {
 				typeSuffix = "Double";
 			}
 			return typeSuffix;
+		}
+
+		private ExpressionTree makeDefaultValue(final TypeMirror memberType) {
+			ExpressionTree defaultValue = null;
+			if (memberType.getKind().isPrimitive()) {
+				switch (memberType.getKind())
+				{
+					case BOOLEAN: defaultValue = make.Literal(false); break;
+					case BYTE: defaultValue = make.TypeCast(make.PrimitiveType(TypeKind.BYTE), make.Literal(0)); break;
+					case SHORT: defaultValue = make.TypeCast(make.PrimitiveType(TypeKind.SHORT), make.Literal(0)); break;
+					case INT: defaultValue = make.Literal(0); break;
+					case LONG: defaultValue = make.Literal(0L); break;
+					case CHAR: defaultValue = make.Literal('\0'); break;
+					case FLOAT: defaultValue = make.Literal(0.0f); break;
+					case DOUBLE: defaultValue = make.Literal(0.0); break;
+				}
+			}
+			else {
+				defaultValue = make.Literal(null);
+			}
+			return defaultValue;
 		}
 	}
 }

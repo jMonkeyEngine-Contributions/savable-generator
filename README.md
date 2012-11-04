@@ -9,11 +9,9 @@ Quick start
 -----------
 
 ### Installation:
-1.	[Download the .nbm module](http://github.com/airbaggins/jme-savable-generator/downloads)
-2.	In the IDE
-  3.	Tools->Plugins->Downloaded->Add Plugins... 
-  4.	Select the downloaded file
-  5.	Restart the IDE as necessary
+1.	Tools->Plugins->Downloaded->Add Plugins... 
+2.	Find savable-generator in the list
+3.	Restart the IDE as necessary
 
 ### Usage
 1.	Make sure your class implements Savable, but has no read/write method

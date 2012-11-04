@@ -50,6 +50,10 @@
                 </dependency>
             </module-dependencies>
             <public-packages/>
+            <class-path-extension>
+                <runtime-relative-path>ext/jme3-export-helpers.jar</runtime-relative-path>
+                <binary-origin>release/modules/ext/jme3-export-helpers.jar</binary-origin>
+            </class-path-extension>
         </data>
     </configuration>
 </project>

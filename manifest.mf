@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+OpenIDE-Module: com.wivlaro.netbeans.serializergenerator
+OpenIDE-Module-Localizing-Bundle: com/wivlaro/netbeans/serializergenerator/Bundle.properties
+OpenIDE-Module-Specification-Version: 1.0
+

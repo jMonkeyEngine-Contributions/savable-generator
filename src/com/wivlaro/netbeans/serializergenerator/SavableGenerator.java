@@ -1,40 +1,33 @@
 package com.wivlaro.netbeans.serializergenerator;
 
 import com.sun.source.tree.AnnotationTree;
-import com.sun.source.tree.ArrayTypeTree;
+import com.sun.source.tree.BinaryTree;
+import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.LiteralTree;
-import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModifiersTree;
-import com.sun.source.tree.ParameterizedTypeTree;
-import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.StatementTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.TypeParameterTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
 import java.io.IOException;
-import java.lang.annotation.ElementType;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedList;
 import java.util.List;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
-import javax.lang.model.element.TypeParameterElement;
-import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
-import javax.lang.model.type.ReferenceType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
@@ -112,8 +105,43 @@ public class SavableGenerator implements CodeGenerator {
 
 		private int tempCounter = 0;
 		private ModifiersTree emptyModifiers;
+		
+		private String makeTempNameFromType(Object inspiration) {
+			String typeString = inspiration.toString();
+			typeString = typeString.replaceAll("\\b([a-zA-Z0-9]+\\.)+", "");
+			typeString = typeString.replaceAll("\\[\\]\\[\\]\\[\\]", "_Array3_");
+			typeString = typeString.replaceAll("\\[\\]\\[\\]", "_Array2_");
+			typeString = typeString.replaceAll("\\[\\]", "_Array_");
+			return makeTempName(typeString);
+		}
 		private String makeTempName(Object inspiration) {
-			return "temp" + (++tempCounter) + "_" + inspiration.toString().replaceAll("[^a-zA-Z0-9]+", "_").replaceFirst("_$", "");
+			return "gen" + (++tempCounter) + "_" + inspiration.toString().replaceAll("[^a-zA-Z0-9]+", "_").replaceFirst("_$", "");
+		}
+
+		private void addBlockStatements(final BlockTree container, StatementTree extra) {
+			if (extra instanceof BlockTree) {
+				for (StatementTree element : ((BlockTree)extra).getStatements()) {
+					make.addBlockStatement(container, element);
+				}
+			}
+			else {
+				make.addBlockStatement(container, extra);
+			}
+		}
+
+		private ExpressionTree makeExpressionAssignable(final List<StatementTree> statements, TypeMirror inputType, ExpressionTree expression, TypeMirror requiredType, String nameInspiration) {
+			final Types types = workingCopy.getTypes();
+			if (!types.isAssignable(inputType, requiredType)) {
+				final String outputKeyName = makeTempName(nameInspiration);
+				statements.add(make.Variable(finalModifiers,
+											outputKeyName,
+											make.Type(requiredType),
+											null));
+				final IdentifierTree outputKey = make.Identifier(outputKeyName);
+				statements.add(generateConverter(inputType, expression, requiredType, outputKey));
+				expression = outputKey;
+			}
+			return expression;
 		}
 
 		private class ExpandFailException extends IllegalStateException {
@@ -367,6 +395,21 @@ public class SavableGenerator implements CodeGenerator {
 			}
 			readBody.add(generateConverter(inputType, inputExpression, memberType, memberLocation));
 		}
+		
+		private TypeMirror stripTypeParameters(TypeMirror type) {
+			if (type instanceof DeclaredType) {
+				TypeElement element = (TypeElement)((DeclaredType)type).asElement();
+				type = workingCopy.getTypes().getDeclaredType(element);
+			}
+			else if (type instanceof ArrayType) {
+				final TypeMirror componentType = ((ArrayType)type).getComponentType();
+				final TypeMirror strippedComponentType = stripTypeParameters(componentType);
+				if (strippedComponentType != componentType) {
+					type = workingCopy.getTypes().getArrayType(strippedComponentType);
+				}
+			}
+			return type;
+		}
 
 		private StatementTree generateConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) throws ExpandFailException {
 			System.out.println("generateConverter: " + inputType + " to " + outputType);
@@ -376,46 +419,63 @@ public class SavableGenerator implements CodeGenerator {
 				return generateTrivialConverter(inputType, inputExpression, outputType, outputLocation);
 			}
 			
-			TypeMirror inputArrayComponentType = null;
-			TypeMirror outputArrayComponentType = null;
-			
-			if (inputType.getKind() == TypeKind.ARRAY) {
-				inputArrayComponentType = ((ArrayType) inputType).getComponentType();
+			if (outputType.getKind().isPrimitive() && inputType instanceof DeclaredType) {
+				DeclaredType inputDeclaredType = (DeclaredType)inputType;
+				TypeElement inputTypeElement = (TypeElement) inputDeclaredType.asElement();
+				final ExecutableElement converterMethod = getMethod(inputTypeElement, outputType.toString() + "Value");
+				if (converterMethod != null) {
+					return make.ExpressionStatement(
+							make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+												 make.MemberSelect(inputExpression, converterMethod),
+												 Arrays.<ExpressionTree>asList()));
+				}
 			}
-			else if (types.isSubtype(inputType, arrayListType)) {
+			
+			TypeMirror inputCollectionComponentType = getComponentType(inputType, null);
+			TypeMirror outputCollectionComponentType = getComponentType(outputType, null);
+			
+			if (outputCollectionComponentType != null && inputCollectionComponentType != null) {
 				
-			}
-			
-			if (outputType.getKind() == TypeKind.ARRAY) {
-				outputArrayComponentType = ((ArrayType) outputType).getComponentType();
-			}
-			else if (types.isSubtype(outputType, arrayListType)) {
+				TypeMirror inputCollectionKeyType = getKeyType(inputType, types.getPrimitiveType(TypeKind.INT));
+				TypeMirror outputCollectionKeyType = getKeyType(outputType, types.getPrimitiveType(TypeKind.INT));
 				
-			}
-			
-			if (inputArrayComponentType != null && outputArrayComponentType != null) {
 				ArrayList<StatementTree> readCommands = new ArrayList<StatementTree>(2);
-				inputExpression = onceOnly(readCommands, inputExpression, inputType);
+				
+				final String tempOutputName = makeTempNameFromType(outputType);
 
 				List<StatementTree> copyBlock = new ArrayList<StatementTree>();
+				final ExpressionTree outputContainerExpression;
 				
-				copyBlock.add(make.ExpressionStatement(
-								make.Assignment(
-									outputLocation,
-									make.NewArray(
-										make.Type(outputArrayComponentType),
-										Arrays.<ExpressionTree>asList(make.MemberSelect(inputExpression, "length")),
-										null))));
+				inputExpression = onceOnly(readCommands, inputExpression, inputType);
+				final boolean outputIsArray = outputType.getKind() == TypeKind.ARRAY;
 				
-				final String inputElement = makeTempName(inputArrayComponentType);
-//				make.EnhancedForLoop(
-//						make.Variable(emptyModifiers, inputElement, make.Type(inputArrayComponentType), null),
-//						inputExpression,
-//						
-//						)
-
-				//Also an array?
-				if (types.isAssignable(inputArrayComponentType, outputArrayComponentType)) {
+				if (outputIsArray) {
+					outputContainerExpression = make.NewArray(make.Type(stripTypeParameters(outputCollectionComponentType)),
+									Arrays.<ExpressionTree>asList(make.MemberSelect(inputExpression, "length")),
+									null);
+				}
+				else if (outputType instanceof DeclaredType) {
+					DeclaredType outputDeclaredType = (DeclaredType)outputType;
+					TypeElement outputTypeElement = (TypeElement)outputDeclaredType.asElement();
+					outputContainerExpression = make.NewClass(null,
+									getTypeParametersTreeList(outputDeclaredType),
+									make.Identifier(outputTypeElement),
+									Arrays.<ExpressionTree>asList(),
+									null);
+				}
+				else {
+					throw new ExpandFailException("Don't know how to make an output type of this one");
+				}
+				
+				final IdentifierTree tempOutput = make.Identifier(tempOutputName);
+				copyBlock.add(make.Variable(emptyModifiers,
+											tempOutputName,
+											make.Type(outputType),
+											outputContainerExpression));
+				
+				//Two arrays of assignable components? Can just use arraycopy.
+				if (inputType.getKind() == TypeKind.ARRAY && outputIsArray
+					&& types.isAssignable(inputCollectionComponentType, outputCollectionComponentType)) {
 					copyBlock.add(
 						make.ExpressionStatement(
 							make.MethodInvocation(
@@ -423,20 +483,118 @@ public class SavableGenerator implements CodeGenerator {
 								make.MemberSelect(
 									make.Identifier(workingCopy.getElements().getTypeElement("java.lang.System")),
 									"arraycopy"),
-								Arrays.asList(inputExpression, make.Literal(0), outputLocation, make.Literal(0), make.MemberSelect(inputExpression, "length")))));
+								Arrays.asList(inputExpression, make.Literal(0), tempOutput, make.Literal(0), make.MemberSelect(inputExpression, "length")))));
 				}
 				else {
-					final IdentifierTree indexIdentifier = make.Identifier(makeTempName("Index"));
-					copyBlock.add(
-						make.ForLoop(
-							Arrays.asList(make.Variable(emptyModifiers,
-														indexIdentifier.getName(), 
-														make.PrimitiveType(TypeKind.INT),
-														make.Literal(0))),
-							make.Binary(Tree.Kind.LESS_THAN, indexIdentifier, make.MemberSelect(inputExpression, "length")),
-							Arrays.asList(make.ExpressionStatement(make.Unary(Tree.Kind.POSTFIX_INCREMENT, indexIdentifier))),
-							generateConverter(inputArrayComponentType, make.ArrayAccess(inputExpression, indexIdentifier), outputArrayComponentType, make.ArrayAccess(outputLocation, indexIdentifier))));
+					final ArrayList<StatementTree> elementCopyStatements = new ArrayList<StatementTree>();
+
+					ExpressionTree keyExpression = null;
+					ExpressionTree inputValueExpression;
+					
+					List<VariableTree> forLoopInitializer = null;
+					BinaryTree forLoopCondition = null;
+					List<ExpressionStatementTree> forLoopUpdate = null;
+					
+					VariableTree forLoopVariable = null;
+					ExpressionTree forLoopExpression = null;
+					
+					DeclaredType inputMapType;
+					if (inputType instanceof DeclaredType && (inputMapType = getTypeAs((DeclaredType)inputType, "java.util.Map")) != null) {
+						final String entryName = makeTempName("entry");
+						
+						TypeMirror entry = null;
+						for (Element element : workingCopy.getElements().getAllMembers((TypeElement)inputMapType.asElement())) {
+							if (element.getSimpleName().contentEquals("Entry") && element instanceof TypeElement) {
+								entry = types.getDeclaredType((TypeElement)element, inputCollectionKeyType, inputCollectionComponentType);
+								break;
+							}
+						}
+						
+						forLoopVariable = make.Variable(emptyModifiers, entryName, make.Type(entry), null);
+						forLoopExpression = make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+																							 make.MemberSelect(inputExpression, "entrySet"),
+																							 Arrays.<ExpressionTree>asList());
+
+						keyExpression = make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+													  make.MemberSelect(make.Identifier(entryName), "getKey"),
+													  Arrays.<ExpressionTree>asList());
+						inputValueExpression = make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+													  make.MemberSelect(make.Identifier(entryName), "getValue"),
+													  Arrays.<ExpressionTree>asList());
+					}
+					else if (inputType instanceof DeclaredType && getTypeAs((DeclaredType)inputType, "java.util.List") != null) {
+						final String entryName = makeTempName("entry");
+						
+						forLoopVariable = make.Variable(emptyModifiers, entryName, make.Type(inputCollectionComponentType), null);
+						forLoopExpression = inputExpression;
+
+						inputValueExpression = make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+													  make.MemberSelect(make.Identifier(entryName), "getValue"),
+													  Arrays.<ExpressionTree>asList());
+					}
+					else {
+						final String indexName = makeTempName("Index");
+						
+						final IdentifierTree indexIdentifier = make.Identifier(indexName);
+						forLoopInitializer = Arrays.asList(make.Variable(emptyModifiers, indexName, make.PrimitiveType(TypeKind.INT), make.Literal(0)));
+						forLoopCondition = make.Binary(Tree.Kind.LESS_THAN, indexIdentifier, make.MemberSelect(inputExpression, "length"));
+						forLoopUpdate = Arrays.asList(make.ExpressionStatement(make.Unary(Tree.Kind.POSTFIX_INCREMENT, indexIdentifier)));
+						
+						keyExpression = indexIdentifier;
+						inputValueExpression = make.ArrayAccess(inputExpression, indexIdentifier);
+					}
+					
+					final boolean outputIsMap = outputType instanceof DeclaredType && getTypeAs((DeclaredType)outputType, "java.util.Map") != null;
+					
+					if (keyExpression != null) {
+						keyExpression = makeExpressionAssignable(elementCopyStatements, inputCollectionKeyType, keyExpression, outputCollectionKeyType, "Key");
+					}
+					else if (outputIsMap || outputIsArray) {
+						final String indexName = makeTempName("Index");
+						copyBlock.add(make.Variable(emptyModifiers, indexName, make.PrimitiveType(TypeKind.INT), make.Literal(0)));
+						keyExpression = make.Unary(Tree.Kind.POSTFIX_INCREMENT, make.Identifier(indexName));
+					}
+					
+					if (outputIsArray) {
+						elementCopyStatements.add(generateConverter(inputCollectionComponentType,
+															 inputValueExpression,
+															 outputCollectionComponentType,
+															 make.ArrayAccess(tempOutput, keyExpression)));
+					}
+					else if (outputIsMap) {
+						
+						inputValueExpression = makeExpressionAssignable(elementCopyStatements, inputCollectionComponentType, inputValueExpression, outputCollectionComponentType, "Value");
+						
+						elementCopyStatements.add(make.ExpressionStatement(
+												make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+																	  make.MemberSelect(tempOutput, "put"),
+																	  Arrays.<ExpressionTree>asList(
+																		keyExpression,
+																		inputValueExpression))));
+					}
+					else if (outputType instanceof DeclaredType && getTypeAs((DeclaredType)outputType, "java.util.List") != null) {
+
+						inputValueExpression = makeExpressionAssignable(elementCopyStatements, inputCollectionComponentType, inputValueExpression, outputCollectionComponentType, "Value");
+
+						elementCopyStatements.add(make.ExpressionStatement(
+												make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+																	  make.MemberSelect(tempOutput, "add"),
+																	  Arrays.<ExpressionTree>asList(
+																		inputValueExpression))));
+					}
+					else {
+						throw new ExpandFailException("Don't know how to generate output for " + outputType);
+					}
+					
+					if (forLoopInitializer != null) {
+						copyBlock.add(make.ForLoop(forLoopInitializer, forLoopCondition, forLoopUpdate, make.Block(elementCopyStatements, true)));
+					}
+					else {
+						copyBlock.add(make.EnhancedForLoop(forLoopVariable, forLoopExpression, make.Block(elementCopyStatements, true)));
+					}
 				}
+				
+				copyBlock.add(make.ExpressionStatement(make.Assignment(outputLocation, tempOutput)));
 
 				readCommands.add(
 					make.If(
@@ -446,11 +604,65 @@ public class SavableGenerator implements CodeGenerator {
 				return make.Block(readCommands, false);
 			}
 			
-			if (types.isSubtype(inputType, arrayListType) && types.isSubtype(outputType, arrayListType)) {
-				throw new ExpandFailException("Array list not done yet");
-			}
-			
 			return generateTrivialConverter(inputType, inputExpression, outputType, outputLocation);
+		}
+
+		private TypeMirror getComponentType(final TypeMirror containerType, TypeMirror defaultComponentType) {
+			System.out.println("getComponentType of " + containerType + " kind=" + containerType.getKind() + " class=" + containerType.getClass());
+			if (containerType.getKind() == TypeKind.ARRAY) {
+				return ((ArrayType) containerType).getComponentType();
+			}
+			else if (containerType instanceof DeclaredType) {
+				TypeMirror componentType = getTypeArgumentOf(containerType, "java.util.Map", 1);
+				if (componentType != null) {
+					return componentType;
+				}
+				componentType = getTypeArgumentOf(containerType, "java.util.List", 0);
+				if (componentType != null) {
+					return componentType;
+				}
+			}
+			return defaultComponentType;
+		}
+
+		private TypeMirror getKeyType(final TypeMirror containerType, TypeMirror defaultComponentType) {
+			System.out.println("getComponentType of " + containerType + " kind=" + containerType.getKind() + " class=" + containerType.getClass());
+			if (containerType.getKind() == TypeKind.ARRAY) {
+				return workingCopy.getTypes().getPrimitiveType(TypeKind.INT);
+			}
+			else if (containerType instanceof DeclaredType) {
+				TypeMirror keyType = getTypeArgumentOf(containerType, "java.util.Map", 0);
+				if (keyType != null) {
+					return keyType;
+				}
+			}
+			return defaultComponentType;
+		}
+
+		private TypeMirror getTypeArgumentOf(final TypeMirror containerType, String baseTypeName, int position) {
+			DeclaredType wantedType;
+			if ((wantedType = getTypeAs((DeclaredType) containerType, baseTypeName)) != null) {
+				final List<? extends TypeMirror> typeArguments = wantedType.getTypeArguments();
+				if (typeArguments != null && !typeArguments.isEmpty()) {
+					return typeArguments.get(position);
+				}
+			}
+			return null;
+		}
+
+		private List<ExpressionTree> getTypeParametersTreeList(DeclaredType type) {
+			ArrayList<ExpressionTree> typeParameters = new ArrayList();
+			final Types types = workingCopy.getTypes();
+			for (TypeMirror parameter : type.getTypeArguments()) {
+				final Element parameterElement = types.asElement(parameter);
+				if (parameterElement != null) {
+					typeParameters.add(make.Identifier(parameterElement));
+				}
+				else {
+					System.out.println("Couldn't make tree for parameterElement="+parameterElement + " kind="+parameterElement.getKind() + " class="+parameterElement.getClass());
+				}
+			}
+			return typeParameters;
 		}
 
 		private StatementTree generateTrivialConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) {
@@ -461,7 +673,6 @@ public class SavableGenerator implements CodeGenerator {
 		}
 		
 
-//		private String calculateTypeSuffix(final VariableTree memberVariable, final TypeElement classTypeElement) {
 		private String calculateTypeSuffix(final TypeMirror type) {
 			//Control which read method to use, and whether we can serialize
 			String typeSuffix = null;
@@ -600,7 +811,7 @@ public class SavableGenerator implements CodeGenerator {
 
 		private ExpressionTree onceOnly(List<StatementTree> statements, ExpressionTree input, final TypeMirror inputType) {
 			if (!(input instanceof IdentifierTree)) {
-				final String tempName = makeTempName(inputType.toString().replaceFirst("^([a-zA-Z0-9]+\\.)+", ""));
+				final String tempName = makeTempNameFromType(inputType);
 				statements.add(make.Variable(finalModifiers, tempName, make.Type(inputType), input));
 				input = make.Identifier(tempName);
 			}

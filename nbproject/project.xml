@@ -4,7 +4,7 @@
     <configuration>
         <data xmlns="http://www.netbeans.org/ns/nb-module-project/3">
             <code-name-base>com.wivlaro.netbeans.serializergenerator</code-name-base>
-            <standalone/>
+            <suite-component/>
             <module-dependencies>
                 <dependency>
                     <code-name-base>org.netbeans.libs.javacapi</code-name-base>
@@ -97,12 +97,10 @@
                     </run-dependency>
                 </dependency>
             </module-dependencies>
-            <public-packages>
-                <package>com.wivlaro.jme3.export</package>
-            </public-packages>
+            <public-packages/>
             <class-path-extension>
-                <runtime-relative-path>ext/jme3-export-helpers.jar</runtime-relative-path>
-                <binary-origin>release/modules/ext/jme3-export-helpers.jar</binary-origin>
+                <runtime-relative-path>ext/savable-generator-helpers.jar</runtime-relative-path>
+                <binary-origin>release/modules/ext/savable-generator-helpers.jar</binary-origin>
             </class-path-extension>
         </data>
     </configuration>

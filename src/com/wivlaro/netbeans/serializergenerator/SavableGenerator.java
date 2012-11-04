@@ -1,6 +1,7 @@
 package com.wivlaro.netbeans.serializergenerator;
 
 import com.sun.source.tree.AnnotationTree;
+import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
@@ -213,7 +214,7 @@ public class SavableGenerator implements CodeGenerator {
 				for (Map.Entry<Name,ElementHandle<TypeElement>> entry : classProcessedStates.entrySet()) {
 					if (LOG >= 3) System.out.println("Checking " + entry.getKey() + " value=" + entry.getValue());
 					if (entry.getValue() != null) {
-						TypeElement element = (TypeElement) entry.getValue().resolve(workingCopy);
+						TypeElement element = entry.getValue().resolve(workingCopy);
 						if (LOG >= 3) System.out.println("Element: " + element);
 						entry.setValue(null);
 						final TreePath path = workingCopy.getTrees().getPath(element);
@@ -352,7 +353,7 @@ public class SavableGenerator implements CodeGenerator {
 												   make.Block(writeBody, false),
 												   null);
 				if (existingWrite != null) {
-					modifiedClassTree = make.removeClassMember(classTree, workingCopy.getTrees().getTree(existingWrite));
+					modifiedClassTree = make.removeClassMember(modifiedClassTree, workingCopy.getTrees().getTree(existingWrite));
 				}
 				modifiedClassTree = make.addClassMember(modifiedClassTree, newMethod);
 			}
@@ -363,17 +364,15 @@ public class SavableGenerator implements CodeGenerator {
 						jmeImporterIdentifier.getName(),
 						make.QualIdent(elements.getTypeElement("com.jme3.export.JmeImporter")),
 						null);
-				
 				MethodTree newMethod = make.Method(methodModifiers,
 												   "read",
 												   make.PrimitiveType(TypeKind.VOID),
 												   Collections.<TypeParameterTree>emptyList(),
 												   Collections.singletonList(readParameter),
-												   Collections.<ExpressionTree>singletonList(throwsClause),
-												   make.Block(readBody, false),
+												   Collections.<ExpressionTree>singletonList(throwsClause), make.Block(readBody, false),
 												   null);
 				if (existingRead != null) {
-					modifiedClassTree = make.removeClassMember(classTree,  workingCopy.getTrees().getTree(existingRead));
+					modifiedClassTree = make.removeClassMember(modifiedClassTree,  workingCopy.getTrees().getTree(existingRead));
 				}
 				modifiedClassTree = make.addClassMember(modifiedClassTree, newMethod);
 			}

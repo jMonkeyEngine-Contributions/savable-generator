@@ -10,6 +10,7 @@ import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
+import com.sun.source.tree.IfTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.ModifiersTree;
 import com.sun.source.tree.StatementTree;
@@ -289,7 +290,9 @@ class ConverterGenerator {
 			}
 		}
 		copyBlock.add(make.ExpressionStatement(make.Assignment(outputLocation, tempOutput)));
-		body.add(make.If(make.Binary(Tree.Kind.NOT_EQUAL_TO, inputExpression, make.Literal(null)),
+		ExpressionTree ifComparator = make.Binary(Tree.Kind.NOT_EQUAL_TO, inputExpression, make.Literal(null));
+		ifComparator = make.Parenthesized(ifComparator); //Bug fix for netbeans?
+		body.add(make.If(ifComparator,
 						 make.Block(copyBlock, false),
 						 make.ExpressionStatement(make.Assignment(outputLocation, make.Literal(null)))));
 	}

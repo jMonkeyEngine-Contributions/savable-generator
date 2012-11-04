@@ -64,11 +64,31 @@ class ConverterGenerator {
 		return "gen" + (++tempCounter) + "_" + inspiration.toString().replaceAll("[^a-zA-Z0-9]+", "_").replaceFirst("_$", "");
 	}
 
-	StatementTree generateConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) throws ConverterFailException {
+	StatementTree generateAssignmentConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) {
+		List<StatementTree> supportingStatements = new ArrayList<StatementTree>();
+		ExpressionTree converter = generateExpressionConverter(supportingStatements, inputType, inputExpression, outputType, outputLocation);
+		
+		if (converter != null) {
+			if (supportingStatements.isEmpty()) {
+				return make.ExpressionStatement(make.Assignment(outputLocation, converter));
+			}
+			else {
+				supportingStatements.add(make.ExpressionStatement(make.Assignment(outputLocation, converter)));
+			}
+		}
+		if (!supportingStatements.isEmpty()) {
+			return make.Block(supportingStatements, false);
+		}
+		else {
+			throw new ConverterFailException("No converter expression or supporting body statements generated!");
+		}
+	}
+
+	private ExpressionTree generateExpressionConverter(List<StatementTree> body, final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) {
 		System.out.println("generateConverter: " + inputType + " to " + outputType);
 		final Types types = workingCopy.getTypes();
 		if (types.isAssignable(inputType, outputType)) {
-			return generateTrivialConverter(inputType, inputExpression, outputType, outputLocation);
+			return inputExpression;
 		}
 
 		if (outputType.getKind().isPrimitive() && inputType instanceof DeclaredType) {
@@ -76,9 +96,9 @@ class ConverterGenerator {
 			TypeElement inputTypeElement = (TypeElement) inputDeclaredType.asElement();
 			final ExecutableElement converterMethod = getMethod(inputTypeElement, outputType.toString() + "Value");
 			if (converterMethod != null) {
-				return make.ExpressionStatement(make.MethodInvocation(Arrays.<ExpressionTree>asList(), make.MemberSelect(inputExpression,
-																														 converterMethod),
-																	  Arrays.<ExpressionTree>asList()));
+				return make.MethodInvocation(Arrays.<ExpressionTree>asList(),
+											  make.MemberSelect(inputExpression, converterMethod),
+											  Arrays.<ExpressionTree>asList());
 			}
 		}
 
@@ -88,11 +108,10 @@ class ConverterGenerator {
 		if (outputCollectionComponentType != null && inputCollectionComponentType != null) {
 			TypeMirror inputCollectionKeyType = getKeyType(inputType, types.getPrimitiveType(TypeKind.INT));
 			TypeMirror outputCollectionKeyType = getKeyType(outputType, types.getPrimitiveType(TypeKind.INT));
-			ArrayList<StatementTree> readCommands = new ArrayList<StatementTree>(2);
 			final String tempOutputName = makeTempNameFromType(outputType);
 			List<StatementTree> copyBlock = new ArrayList<StatementTree>();
 			final ExpressionTree outputContainerExpression;
-			inputExpression = onceOnly(readCommands, inputExpression, inputType);
+			inputExpression = onceOnly(body, inputExpression, inputType);
 			final boolean outputIsArray = outputType.getKind() == TypeKind.ARRAY;
 			if (outputIsArray) {
 				outputContainerExpression = make.NewArray(make.Type(stripTypeParameters(outputCollectionComponentType)),
@@ -113,7 +132,8 @@ class ConverterGenerator {
 																							 outputCollectionComponentType)) {
 				copyBlock.add(make.ExpressionStatement(
 						make.MethodInvocation(Collections.<ExpressionTree>emptyList(),
-											  make.MemberSelect(make.Identifier(workingCopy.getElements().getTypeElement("java.lang.System")),
+											  make.MemberSelect(
+						make.Identifier(workingCopy.getElements().getTypeElement("java.lang.System")),
 																"arraycopy"),
 											  Arrays.asList(inputExpression,
 															make.Literal(0),
@@ -123,14 +143,18 @@ class ConverterGenerator {
 			}
 			else {
 				final ArrayList<StatementTree> elementCopyStatements = new ArrayList<StatementTree>();
+
 				ExpressionTree keyExpression = null;
 				ExpressionTree inputValueExpression;
+
 				List<VariableTree> forLoopInitializer = null;
 				BinaryTree forLoopCondition = null;
 				List<ExpressionStatementTree> forLoopUpdate = null;
 				VariableTree forLoopVariable = null;
 				ExpressionTree forLoopExpression = null;
+
 				DeclaredType inputMapType;
+
 				if (inputType instanceof DeclaredType && (inputMapType = getTypeAs((DeclaredType) inputType, "java.util.Map")) != null) {
 					final String entryName = makeTempName("entry");
 					TypeMirror entry = null;
@@ -179,10 +203,10 @@ class ConverterGenerator {
 					keyExpression = make.Unary(Tree.Kind.POSTFIX_INCREMENT, make.Identifier(indexName));
 				}
 				if (outputIsArray) {
-					elementCopyStatements.add(generateConverter(inputCollectionComponentType,
-																inputValueExpression,
-																outputCollectionComponentType,
-																make.ArrayAccess(tempOutput, keyExpression)));
+					elementCopyStatements.add(generateAssignmentConverter(inputCollectionComponentType,
+																		  inputValueExpression,
+																		  outputCollectionComponentType,
+																		  make.ArrayAccess(tempOutput, keyExpression)));
 				}
 				else if (outputIsMap) {
 					inputValueExpression = makeExpressionAssignable(elementCopyStatements,
@@ -207,6 +231,8 @@ class ConverterGenerator {
 				else {
 					throw new ConverterFailException("Don't know how to generate output for " + outputType);
 				}
+				
+				
 				if (forLoopInitializer != null) {
 					copyBlock.add(make.ForLoop(forLoopInitializer, forLoopCondition, forLoopUpdate, make.Block(elementCopyStatements, true)));
 				}
@@ -215,11 +241,19 @@ class ConverterGenerator {
 				}
 			}
 			copyBlock.add(make.ExpressionStatement(make.Assignment(outputLocation, tempOutput)));
-			readCommands.add(make.If(make.Binary(Tree.Kind.NOT_EQUAL_TO, inputExpression, make.Literal(null)), make.Block(copyBlock, false),
+			body.add(make.If(make.Binary(Tree.Kind.NOT_EQUAL_TO, inputExpression, make.Literal(null)),
+									 make.Block(copyBlock, false),
 									 make.ExpressionStatement(make.Assignment(outputLocation, make.Literal(null)))));
-			return make.Block(readCommands, false);
+			return null;
 		}
-		return generateTrivialConverter(inputType, inputExpression, outputType, outputLocation);
+		return generateTrivialConverter(inputType, inputExpression, outputType);
+	}
+
+	ExpressionTree generateTrivialConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType) {
+		if (!workingCopy.getTypes().isAssignable(inputType, outputType)) {
+			inputExpression = make.TypeCast(make.Type(outputType), inputExpression);
+		}
+		return inputExpression;
 	}
 
 	ExecutableElement getMethod(TypeElement parent, CharSequence name) {
@@ -233,7 +267,7 @@ class ConverterGenerator {
 	}
 
 	List<ExpressionTree> getTypeParametersTreeList(DeclaredType type) {
-		ArrayList<ExpressionTree> typeParameters = new ArrayList();
+		ArrayList<ExpressionTree> typeParameters = new ArrayList<ExpressionTree>();
 		final Types types = workingCopy.getTypes();
 		for (TypeMirror parameter : type.getTypeArguments()) {
 			final Element parameterElement = types.asElement(parameter);
@@ -277,23 +311,20 @@ class ConverterGenerator {
 		return input;
 	}
 
-	ExpressionTree makeExpressionAssignable(final List<StatementTree> statements, TypeMirror inputType, ExpressionTree expression, TypeMirror requiredType, String nameInspiration) {
+	private ExpressionTree makeExpressionAssignable(final List<StatementTree> statements, TypeMirror inputType, ExpressionTree expression, TypeMirror requiredType, String nameInspiration) {
 		final Types types = workingCopy.getTypes();
 		if (!types.isAssignable(inputType, requiredType)) {
+			List<StatementTree> converterStatements = new ArrayList<StatementTree>();
 			final String outputKeyName = makeTempName(nameInspiration);
-			statements.add(make.Variable(finalModifiers, outputKeyName, make.Type(requiredType), null));
 			final IdentifierTree outputKey = make.Identifier(outputKeyName);
-			statements.add(generateConverter(inputType, expression, requiredType, outputKey));
-			expression = outputKey;
+			expression = generateExpressionConverter(converterStatements, inputType, expression, requiredType, outputKey);
+			if (expression == null) {
+				statements.add(make.Variable(finalModifiers, outputKeyName, make.Type(requiredType), null));
+				expression = outputKey;
+			}
+			statements.addAll(converterStatements);
 		}
 		return expression;
-	}
-
-	StatementTree generateTrivialConverter(final TypeMirror inputType, ExpressionTree inputExpression, final TypeMirror outputType, final ExpressionTree outputLocation) {
-		if (!workingCopy.getTypes().isAssignable(inputType, outputType)) {
-			inputExpression = make.TypeCast(make.Type(outputType), inputExpression);
-		}
-		return make.ExpressionStatement(make.Assignment(outputLocation, inputExpression));
 	}
 
 	TypeMirror getKeyType(final TypeMirror containerType, TypeMirror defaultComponentType) {

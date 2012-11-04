@@ -362,7 +362,7 @@ public class SavableGenerator implements CodeGenerator {
 						make.MemberSelect(make.Identifier(capsuleIdentifier), readName),
 						Arrays.asList(fieldLiteral,defaultValue));
 			}
-			readBody.add(converterGenerator.generateConverter(inputType, inputExpression, memberType, memberLocation));
+			readBody.add(converterGenerator.generateAssignmentConverter(inputType, inputExpression, memberType, memberLocation));
 		}
 		
 
